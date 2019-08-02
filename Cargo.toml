@@ -1,0 +1,12 @@
+[package]
+name = "kubeconfig"
+version = "0.1.0"
+authors = ["Edvard Makhlin <edvard.makhlin@iii.com>"]
+edition = "2018"
+
+[dependencies]
+serde = "1.0.97"
+serde_derive = "1.0.97"
+serde_yaml = "0.8.9"
+failure = "0.1.5"
+base64 = "0.10"
