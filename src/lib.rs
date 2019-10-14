@@ -1,4 +1,5 @@
 use std::path::Path;
+extern crate dirs;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_yaml;
@@ -7,10 +8,18 @@ extern crate failure;
 use failure::Error;
 
 mod errors;
-use errors::ConfigError;
+use errors::{ConfigError, other_error};
 mod deserializers;
 use deserializers::from_base64;
 use std::collections::HashMap;
+mod utils;
+
+
+use openssl::{
+    pkcs12::Pkcs12,
+    pkey::PKey,
+    x509::X509,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -133,12 +142,12 @@ struct Config {
 use std::collections::hash_map::Iter;
 
 impl Config {
-    fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config, Error> {
+    pub fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config, Error> {
         let f = std::fs::File::open(name)?;
         Ok(serde_yaml::from_reader(f)?)
     }
 
-    fn load_from_data(data: &[u8]) -> Result<Config, Error> {
+    pub fn load_from_data(data: &[u8]) -> Result<Config, Error> {
         Ok(serde_yaml::from_slice(data)?)
     }
 
@@ -151,14 +160,14 @@ impl Config {
         a
     }
 
-    fn merge_with(mut self, config: Config) -> Result<Config, Error> {
+    pub fn merge_with(mut self, config: Config) -> Result<Config, Error> {
         self.clusters = Config::merge_hashmap(self.clusters, config.clusters);
         self.auth_infos = Config::merge_hashmap(self.auth_infos, config.auth_infos);
         self.contexts = Config::merge_hashmap(self.contexts, config.contexts);
         Ok(self)
     }
 
-    fn load<T: AsRef<Path>>(filename: Option<T>) -> Result<Config, Error> {
+    pub fn load<T: AsRef<Path>>(filename: Option<T>) -> Result<Config, Error> {
         if let Some(filename) = filename {
             Config::load_from_file(filename)
         } else {
@@ -174,7 +183,7 @@ impl Config {
                     }
                 }
                 loaded_config.ok_or(ConfigError::Other{cause:"Something bad happened".to_owned()}.into())
-            } else if let Some(homedir) = std::env::home_dir() {
+            } else if let Some(homedir) = dirs::home_dir() {
                 let kubeconfig = std::path::Path::new(&homedir).join(".kube").join("config");
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
@@ -188,13 +197,68 @@ impl Config {
             
         }
     }
+
+    pub fn get_current(&self) -> Option<&Cluster> {
+        if let Some(ref context) = self.contexts.get(&self.current_context) {
+            self.clusters.get(&context.cluster)
+        } else {
+            None
+        }
+
+    }
+
+    pub fn load_certificate_authority(&self) -> Result<Vec<u8>, ConfigError> {
+        if let Some(cluster) = self.get_current() {
+            if let Some(ca_file) = &cluster.certificate_authority {
+                return utils::load_ca_from_file(ca_file)
+            } else if let Some(ca_data) = &cluster.certificate_authority_data {
+                return Ok(ca_data.to_vec())
+            } else {
+                return Err(other_error("No ca data or file found"))
+            }
+        } else {
+            return Err(other_error("No ca data or file found"))
+        }
+
+    }
+
+    pub fn ca_bundle(&self) -> Result<Vec<X509>, ConfigError> {
+        let bundle = self.load_certificate_authority().map_err(|e| ConfigError::SSLError(e.to_string()))?;
+        X509::stack_from_pem(&bundle).map_err(|e| ConfigError::SSLError(e.to_string()))
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::env;
+
+    fn load_from_fixture(fixture_name: &str) -> Result<Config, Error> {
+        let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.push("fixtures");
+        manifest_dir.push(fixture_name);
+        Config::load(Some(manifest_dir))
+    }
+
     #[test]
-    fn it_works() {
+    fn should_load_ca() {
+        let c = load_from_fixture("ca-from-file.yaml").unwrap();
+        let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.push("fixtures");
+        env::set_var("%USERPROFILE%", manifest_dir);
+        println!("user profile var: {:?}", env::var("%USERPROFILE%").unwrap());
+        println!("ca file: {}, ca data: {}", 
+            c.get_current().unwrap().certificate_authority.is_some(),
+            c.get_current().unwrap().certificate_authority_data.is_some()
+        );
+        assert!(c.load_certificate_authority().is_ok(), 
+        format!("{:?}", c.load_certificate_authority().err()));
+    }
+
+    #[test]
+    fn should_try_to_load_default() {
         let config = Config::load(None::<&Path>);
         match config {
             Ok(config) => println!("config: {:?}", config),
@@ -202,7 +266,18 @@ mod tests {
                 eprintln!("error: {:?}", e);
             }
         };
-        assert!(Config::load(Some("/home/l/.kube/config")).is_ok());
+    }
+
+    #[test]
+    fn should_load_multiple_cluster_config() {
+        let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.push("fixtures/multiple-clusters.yaml");
+        let c = Config::load(Some(manifest_dir));
+        assert!(c.is_ok());
+        let c = c.unwrap();
+        assert!(c.clusters.len() == 2);
+        assert!(c.contexts.len() == 3);
+        assert!(c.current_context == "");
     }
 
     #[test]

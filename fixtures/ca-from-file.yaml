@@ -1,0 +1,20 @@
+current-context: my-context
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority: ca.crt 
+    server: https://example.com:4443
+  name: my-cluster
+kind: Config
+preferences: {}
+contexts:
+- context:
+    cluster: my-cluster
+    namespace: frontend
+    user: developer
+  name: my-context
+users:
+- name: green-user
+  user:
+    client-certificate: TEST_MARKER_ABSOLUTE_CA_PATH
+    client-key: TEST_MARKER_ABSOLUTE_KEY_PATH 
