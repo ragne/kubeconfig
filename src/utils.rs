@@ -1,5 +1,4 @@
 use crate::errors::{other_error, ConfigError};
-use base64::decode;
 use dirs::home_dir;
 use std::convert::TryInto;
 use std::env;
@@ -9,9 +8,20 @@ use std::path::{Path, PathBuf};
 
 const KUBECONFIG: &str = "KUBECONFIG";
 
+#[cfg(not(test))]
 #[inline(always)]
 fn default_kube_dir() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".kube"))
+}
+
+#[doc(hidden)]
+#[cfg(test)]
+#[inline(always)]
+fn default_kube_dir() -> Option<PathBuf> {
+    let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.push("fixtures");
+    manifest_dir.push(".kube");
+    Some(manifest_dir)
 }
 
 pub fn default_kube_path() -> Option<PathBuf> {
@@ -47,9 +57,8 @@ pub(crate) fn load_ca_from_file<P: AsRef<Path>>(filename: P) -> Result<Vec<u8>, 
     );
     file.read_to_end(&mut buf)?;
 
+    // Guess files aren't encoded in base64
     Ok(buf.to_vec())
-    // Ok(base64::decode(&buf)
-        // .map_err(|e| other_error(format!("Cannot decode base64 data. caused by: {}", e)))?)
 }
 
 

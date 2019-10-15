@@ -31,7 +31,7 @@ users:
       - eks
       - get-token
       - --cluster-name
-      - eks-1
+      - cluster1
       command: aws
 - name: cluster2
   user:
@@ -43,5 +43,5 @@ users:
       - eks
       - get-token
       - --cluster-name
-      - eks-4
+      - cluster2
       command: aws

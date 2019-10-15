@@ -60,7 +60,6 @@ pub struct ExecCredentialSpec {}
 #[serde(rename_all = "kebab-case")]
 pub struct ExecCredential {
     pub kind: Option<String>,
-
     pub api_version: Option<String>,
     pub spec: Option<ExecCredentialSpec>,
     pub status: Option<ExecCredentialStatus>,
@@ -304,6 +303,17 @@ mod tests {
     }
 
     #[test]
+    fn should_exec_command() {
+        let c = load_from_fixture("ca-from-data.yaml").unwrap();
+        c.auth_infos.get(&c.current_context).and_then(|ref auth_info: &AuthInfo|{
+            let res = auth_info.exec_config.as_ref().unwrap().auth_exec();
+            assert!(res.is_ok(), format!("Exec config failed with: {:?}", res.err()));
+            Some(())
+        }
+        ).unwrap()
+    }
+
+    #[test]
     fn should_load_ca_from_file() {
         let c = load_from_fixture("ca-from-file.yaml").unwrap();
         let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -393,7 +403,7 @@ users:
     client-certificate: path/to/my/client/cert
     client-key: path/to/my/client/key"###;
         match Config::load_from_data(data.as_bytes()) {
-            Ok(config) => {} //println!("config: {:?}", config),
+            Ok(_config) => {},
             Err(e) => {
                 eprintln!("error: {:?}", e);
             }
