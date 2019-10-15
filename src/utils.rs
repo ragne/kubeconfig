@@ -52,7 +52,7 @@ pub(crate) fn load_ca_from_file<P: AsRef<Path>>(filename: P) -> Result<Vec<u8>, 
             .and_then(|dir| Some(dir.join(filename)))
             .ok_or_else(|| other_error(format!("Cannot load file {}", filename.display())))?
     };
-    println!("filename is: {:?}", &filename);
+
     let mut file = File::open(filename.clone()).map_err(|e| ConfigError::IOError { inner: e })?;
     let mut buf = Vec::with_capacity(
         metadata(filename)?

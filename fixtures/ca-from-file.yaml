@@ -11,10 +11,10 @@ contexts:
 - context:
     cluster: my-cluster
     namespace: frontend
-    user: developer
+    user: green-user
   name: my-context
 users:
 - name: green-user
   user:
-    client-certificate: TEST_MARKER_ABSOLUTE_CA_PATH
-    client-key: TEST_MARKER_ABSOLUTE_KEY_PATH 
+    client-certificate: ca.crt
+    client-key: ca.key

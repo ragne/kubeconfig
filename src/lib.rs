@@ -187,14 +187,12 @@ impl AuthInfo {
         }
     }
 
-    
     pub fn get_pkcs12(&self, password: &str) -> Result<Pkcs12, ConfigError> {
         let client_cert = &self.get_client_certificate()?;
         let client_key = &self.get_client_key()?;
         let x509 = X509::from_pem(&client_cert)?;
         let pkey = PKey::private_key_from_pem(&client_key)?;
-        Ok(Pkcs12::builder()
-            .build(password, "kubeconfig", &pkey, &x509)?)
+        Ok(Pkcs12::builder().build(password, "kubeconfig", &pkey, &x509)?)
     }
 }
 
@@ -277,8 +275,7 @@ impl Config {
                     }
                     .into(),
                 )
-            } else if let Some(homedir) = dirs::home_dir() {
-                let kubeconfig = std::path::Path::new(&homedir).join(".kube").join("config");
+            } else if let Ok(kubeconfig) = utils::find_kubeconfig() {
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
                 } else {
@@ -363,6 +360,32 @@ mod tests {
     }
 
     #[test]
+    fn should_get_pkcs12() {
+        let c = load_from_fixture("ca-from-file.yaml").unwrap();
+        let res = c.auth_infos.get("green-user").unwrap().get_pkcs12("");
+        assert!(
+            res.is_ok(),
+            format!("get_pkcs12 failed with: {:?}", res.err())
+        );
+        // typical openssl gymnastics
+        res.ok()
+            .unwrap()
+            .parse("")
+            .unwrap()
+            .cert
+            .subject_name()
+            .entries()
+            .map(|el| {
+                let data = el.data().as_utf8();
+                assert!(
+                    data.is_ok(),
+                    "Certificate subject is not okay/doesn't contain valid utf8"
+                );
+            })
+            .for_each(drop);
+    }
+
+    #[test]
     fn should_exec_command() {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
         c.auth_infos
@@ -384,11 +407,6 @@ mod tests {
     #[test]
     fn should_load_ca_from_file() {
         let c = load_from_fixture("ca-from-file.yaml").unwrap();
-        let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        manifest_dir.push("fixtures");
-        // Change $HOME for given test to point to fixture directory
-        env::set_var("HOME", manifest_dir);
-        println!("user profile var: {:?}", env::var("HOME").unwrap());
         assert!(
             c.load_certificate_authority().is_ok(),
             format!("{:?}", c.load_certificate_authority().err())
