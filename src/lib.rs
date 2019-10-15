@@ -110,12 +110,12 @@ struct ExecConfig {
 }
 
 impl ExecConfig {
-    pub fn auth_exec(&self) -> Result<ExecCredential, ConfigError> {
+    pub fn exec(&self) -> Result<ExecCredential, ConfigError> {
         let mut cmd = Command::new(&self.command);
         if let Some(args) = &self.args {
             cmd.args(args);
         };
-        // @TODO: fixme 
+        // @TODO: fixme
         if let Some(env) = &self.env {
             cmd.envs(
                 env.into_iter()
@@ -131,8 +131,9 @@ impl ExecConfig {
             dbg!(&error);
             return Err(ConfigError::ExecError(error));
         }
-        let result: Result<ExecCredential, ConfigError> =
-            serde_json::from_slice(&out.stdout).map_err(|e| ConfigError::ExecError(e.to_string()));
+        let result = serde_json::from_slice(&out.stdout).map_err(|e| {
+            ConfigError::ExecError(format!("Unable to deserialize json: {}", e.to_string()))
+        });
         result
     }
 }
@@ -159,6 +160,42 @@ struct AuthInfo {
     #[serde(rename = "exec")]
     exec_config: Option<ExecConfig>,
     extensions: Extensions,
+}
+
+impl AuthInfo {
+    pub fn get_client_certificate(&self) -> Result<Vec<u8>, ConfigError> {
+        if let Some(cert_data) = &self.client_certificate_data {
+            utils::b64decode(&cert_data)
+        } else if let Some(cert_file) = &self.client_certificate {
+            utils::load_ca_from_file(cert_file)
+        } else {
+            Err(ConfigError::Other {
+                cause: "Missing both client_certificate_data and client_certificate".to_owned(),
+            })
+        }
+    }
+
+    pub fn get_client_key(&self) -> Result<Vec<u8>, ConfigError> {
+        if let Some(key_data) = &self.client_key_data {
+            utils::b64decode(key_data.as_bytes())
+        } else if let Some(key_file) = &self.client_key {
+            utils::load_ca_from_file(key_file)
+        } else {
+            Err(ConfigError::Other {
+                cause: "Missing both client_key_data and client_key".to_owned(),
+            })
+        }
+    }
+
+    
+    pub fn get_pkcs12(&self, password: &str) -> Result<Pkcs12, ConfigError> {
+        let client_cert = &self.get_client_certificate()?;
+        let client_key = &self.get_client_key()?;
+        let x509 = X509::from_pem(&client_cert)?;
+        let pkey = PKey::private_key_from_pem(&client_key)?;
+        Ok(Pkcs12::builder()
+            .build(password, "kubeconfig", &pkey, &x509)?)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -295,22 +332,53 @@ mod tests {
     use std::env;
     use std::path::PathBuf;
 
-    fn load_from_fixture(fixture_name: &str) -> Result<Config, Error> {
+    fn get_fixtures_dir() -> PathBuf {
         let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         manifest_dir.push("fixtures");
+        manifest_dir
+    }
+
+    fn load_from_fixture(fixture_name: &str) -> Result<Config, Error> {
+        let mut manifest_dir = get_fixtures_dir();
         manifest_dir.push(fixture_name);
         Config::load(Some(manifest_dir))
     }
 
+    fn patch_exec_command<'a>(ec: &'a mut ExecConfig) -> &'a ExecConfig {
+        let mut exe = get_fixtures_dir();
+        if cfg!(target_os = "windows") {
+            exe.push("mock-aws.ps1");
+        } else {
+            exe.push("mock-aws.sh");
+        }
+        let mut args = ec.args.take().unwrap();
+        args.insert(0, exe.to_string_lossy().to_string());
+        ec.args = Some(args);
+        if cfg!(target_os = "windows") {
+            ec.command = "powershell".to_owned();
+        } else {
+            ec.command = "bash".to_owned();
+        }
+        ec
+    }
+
     #[test]
     fn should_exec_command() {
-        let c = load_from_fixture("ca-from-data.yaml").unwrap();
-        c.auth_infos.get(&c.current_context).and_then(|ref auth_info: &AuthInfo|{
-            let res = auth_info.exec_config.as_ref().unwrap().auth_exec();
-            assert!(res.is_ok(), format!("Exec config failed with: {:?}", res.err()));
-            Some(())
-        }
-        ).unwrap()
+        let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
+        c.auth_infos
+            .get_mut(&c.current_context)
+            .and_then(|auth_info| {
+                let mut ec = auth_info.exec_config.take().unwrap();
+                let ec = patch_exec_command(&mut ec);
+                let res = ec.exec();
+                assert!(
+                    res.is_ok(),
+                    format!("Exec config failed with: {:?}", res.err())
+                );
+                println!("{:?}", res.unwrap());
+                Some(())
+            })
+            .unwrap()
     }
 
     #[test]
@@ -403,7 +471,7 @@ users:
     client-certificate: path/to/my/client/cert
     client-key: path/to/my/client/key"###;
         match Config::load_from_data(data.as_bytes()) {
-            Ok(_config) => {},
+            Ok(_config) => {}
             Err(e) => {
                 eprintln!("error: {:?}", e);
             }

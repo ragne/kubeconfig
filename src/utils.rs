@@ -5,6 +5,7 @@ use std::env;
 use std::fs::{metadata, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use base64;
 
 const KUBECONFIG: &str = "KUBECONFIG";
 
@@ -22,6 +23,10 @@ fn default_kube_dir() -> Option<PathBuf> {
     manifest_dir.push("fixtures");
     manifest_dir.push(".kube");
     Some(manifest_dir)
+}
+
+pub(crate) fn b64decode(bytes: &[u8]) -> Result<Vec<u8>, ConfigError> {
+    base64::decode(bytes).map_err(|e| ConfigError::B64DecodeError(e.to_string()))
 }
 
 pub fn default_kube_path() -> Option<PathBuf> {
