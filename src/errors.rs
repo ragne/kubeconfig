@@ -7,8 +7,9 @@ pub(crate) enum ConfigError {
     #[fail(display = "Merge error: {}", cause)]
     FailedMerge { cause: String },
     #[fail(display = "SSL error: {}", 0)]
-    SSLError(String)
-    
+    SSLError(String),
+    #[fail(display = "Exec error: {}", 0)]
+    ExecError(String)
 }
 
 pub(crate) fn other_error<P:Into<String>>(cause: P) -> ConfigError {

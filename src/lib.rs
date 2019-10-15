@@ -2,24 +2,21 @@ use std::path::Path;
 extern crate dirs;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde_json;
 extern crate serde_yaml;
 #[macro_use]
 extern crate failure;
 use failure::Error;
 
 mod errors;
-use errors::{ConfigError, other_error};
+use errors::{other_error, ConfigError};
 mod deserializers;
 use deserializers::from_base64;
 use std::collections::HashMap;
 mod utils;
 
-
-use openssl::{
-    pkcs12::Pkcs12,
-    pkey::PKey,
-    x509::X509,
-};
+use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
+use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -27,7 +24,6 @@ struct Preferences {
     colors: Option<bool>,
     extensions: Extensions,
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -40,7 +36,6 @@ struct Cluster {
     extensions: Extensions,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct Context {
@@ -50,12 +45,34 @@ struct Context {
     extensions: Extensions,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct AuthProviderConfig {
     name: String,
     config: Option<HashMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ExecCredentialSpec {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ExecCredential {
+    pub kind: Option<String>,
+
+    pub api_version: Option<String>,
+    pub spec: Option<ExecCredentialSpec>,
+    pub status: Option<ExecCredentialStatus>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ExecCredentialStatus {
+    pub expiration_timestamp: Option<String>,
+    pub token: Option<String>,
+    pub client_certificate_data: Option<String>,
+    pub client_key_data: Option<String>,
 }
 
 // type ExecConfig struct {
@@ -93,6 +110,34 @@ struct ExecConfig {
     api_version: Option<String>,
 }
 
+impl ExecConfig {
+    pub fn auth_exec(&self) -> Result<ExecCredential, ConfigError> {
+        let mut cmd = Command::new(&self.command);
+        if let Some(args) = &self.args {
+            cmd.args(args);
+        };
+        // @TODO: fixme 
+        if let Some(env) = &self.env {
+            cmd.envs(
+                env.into_iter()
+                    .map(|ref kvpair| (kvpair.name.clone(), kvpair.value.clone()))
+                    .collect::<HashMap<String, String>>(),
+            );
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| ConfigError::ExecError(e.to_string()))?;
+        if !out.status.success() {
+            let error = format!("command `{:?}` failed: {:?}", cmd, out);
+            dbg!(&error);
+            return Err(ConfigError::ExecError(error));
+        }
+        let result: Result<ExecCredential, ConfigError> =
+            serde_json::from_slice(&out.stdout).map_err(|e| ConfigError::ExecError(e.to_string()));
+        result
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct AuthInfo {
@@ -112,7 +157,7 @@ struct AuthInfo {
     username: Option<String>,
     password: Option<String>,
     auth_provider: Option<AuthProviderConfig>,
-    #[serde(rename="exec")]
+    #[serde(rename = "exec")]
     exec_config: Option<ExecConfig>,
     extensions: Extensions,
 }
@@ -131,7 +176,11 @@ struct Config {
     preferences: Preferences,
     #[serde(default, deserialize_with = "deserializers::cluster_de")]
     clusters: HashMap<String, Cluster>,
-    #[serde(default, deserialize_with = "deserializers::auth_info_de", rename="users")]
+    #[serde(
+        default,
+        deserialize_with = "deserializers::auth_info_de",
+        rename = "users"
+    )]
     auth_infos: HashMap<String, AuthInfo>,
     #[serde(deserialize_with = "deserializers::context_de")]
     contexts: HashMap<String, Context>,
@@ -176,25 +225,38 @@ impl Config {
                 let mut loaded_config = None;
                 for path in std::env::split_paths(kubeconfig) {
                     if loaded_config.is_none() {
-                    loaded_config = Some(Config::load_from_file(path)?);
+                        loaded_config = Some(Config::load_from_file(path)?);
                     } else {
                         loaded_config = Some(
-                            loaded_config.take().unwrap().merge_with(Config::load_from_file(path)?)?);
+                            loaded_config
+                                .take()
+                                .unwrap()
+                                .merge_with(Config::load_from_file(path)?)?,
+                        );
                     }
                 }
-                loaded_config.ok_or(ConfigError::Other{cause:"Something bad happened".to_owned()}.into())
+                loaded_config.ok_or(
+                    ConfigError::Other {
+                        cause: "Something bad happened".to_owned(),
+                    }
+                    .into(),
+                )
             } else if let Some(homedir) = dirs::home_dir() {
                 let kubeconfig = std::path::Path::new(&homedir).join(".kube").join("config");
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
                 } else {
-                    Err(ConfigError::Other{cause:"Cannot find config to load".to_owned()}.into())
+                    Err(ConfigError::Other {
+                        cause: "Cannot find config to load".to_owned(),
+                    }
+                    .into())
                 }
             } else {
-                    Err(ConfigError::Other{cause:"Cannot find config to load".to_owned()}.into())
+                Err(ConfigError::Other {
+                    cause: "Cannot find config to load".to_owned(),
                 }
-
-            
+                .into())
+            }
         }
     }
 
@@ -204,36 +266,35 @@ impl Config {
         } else {
             None
         }
-
     }
 
     pub fn load_certificate_authority(&self) -> Result<Vec<u8>, ConfigError> {
         if let Some(cluster) = self.get_current() {
             if let Some(ca_file) = &cluster.certificate_authority {
-                return utils::load_ca_from_file(ca_file)
+                return utils::load_ca_from_file(ca_file);
             } else if let Some(ca_data) = &cluster.certificate_authority_data {
-                return Ok(ca_data.to_vec())
+                return Ok(ca_data.to_vec());
             } else {
-                return Err(other_error("No ca data or file found"))
+                return Err(other_error("No ca data or file found"));
             }
         } else {
-            return Err(other_error("No ca data or file found"))
+            return Err(other_error("No ca data or file found"));
         }
-
     }
 
     pub fn ca_bundle(&self) -> Result<Vec<X509>, ConfigError> {
-        let bundle = self.load_certificate_authority().map_err(|e| ConfigError::SSLError(e.to_string()))?;
+        let bundle = self
+            .load_certificate_authority()
+            .map_err(|e| ConfigError::SSLError(e.to_string()))?;
         X509::stack_from_pem(&bundle).map_err(|e| ConfigError::SSLError(e.to_string()))
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::env;
+    use std::path::PathBuf;
 
     fn load_from_fixture(fixture_name: &str) -> Result<Config, Error> {
         let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -243,18 +304,30 @@ mod tests {
     }
 
     #[test]
-    fn should_load_ca() {
+    fn should_load_ca_from_file() {
         let c = load_from_fixture("ca-from-file.yaml").unwrap();
         let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         manifest_dir.push("fixtures");
-        env::set_var("%USERPROFILE%", manifest_dir);
-        println!("user profile var: {:?}", env::var("%USERPROFILE%").unwrap());
-        println!("ca file: {}, ca data: {}", 
-            c.get_current().unwrap().certificate_authority.is_some(),
-            c.get_current().unwrap().certificate_authority_data.is_some()
+        // Change $HOME for given test to point to fixture directory
+        env::set_var("HOME", manifest_dir);
+        println!("user profile var: {:?}", env::var("HOME").unwrap());
+        assert!(
+            c.load_certificate_authority().is_ok(),
+            format!("{:?}", c.load_certificate_authority().err())
         );
-        assert!(c.load_certificate_authority().is_ok(), 
-        format!("{:?}", c.load_certificate_authority().err()));
+    }
+
+    #[test]
+    fn should_load_ca_from_data() {
+        let c = load_from_fixture("ca-from-data.yaml").unwrap();
+        assert!(c.ca_bundle().is_ok(), format!("{:?}", c.ca_bundle().err()));
+        for cert in c.ca_bundle().unwrap() {
+            let _ = cert
+                .subject_name()
+                .entries()
+                .map(|el| println!("subject_name: {:?}", el.data().as_utf8().unwrap()))
+                .collect::<Vec<()>>();
+        }
     }
 
     #[test]
@@ -320,7 +393,7 @@ users:
     client-certificate: path/to/my/client/cert
     client-key: path/to/my/client/key"###;
         match Config::load_from_data(data.as_bytes()) {
-            Ok(config) => {}//println!("config: {:?}", config),
+            Ok(config) => {} //println!("config: {:?}", config),
             Err(e) => {
                 eprintln!("error: {:?}", e);
             }

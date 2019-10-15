@@ -47,8 +47,9 @@ pub(crate) fn load_ca_from_file<P: AsRef<Path>>(filename: P) -> Result<Vec<u8>, 
     );
     file.read_to_end(&mut buf)?;
 
-    Ok(base64::decode(&buf)
-        .map_err(|e| other_error(format!("Cannot decode base64 data. caused by: {}", e)))?)
+    Ok(buf.to_vec())
+    // Ok(base64::decode(&buf)
+        // .map_err(|e| other_error(format!("Cannot decode base64 data. caused by: {}", e)))?)
 }
 
 
