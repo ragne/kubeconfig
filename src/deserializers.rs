@@ -1,5 +1,5 @@
 use base64;
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 
 pub fn from_base64<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
@@ -41,3 +41,9 @@ macro_rules! deserializer_for {
 deserializer_for!(cluster, cluster_de);
 deserializer_for!(context, context_de);
 deserializer_for!(user, auth_info_de);
+// This is a hack for macro reuse to generate auto Deserialize for 
+// struct KeyValuePair {
+//     name: String,
+//     value: String,
+// }
+deserializer_for!(user, value);

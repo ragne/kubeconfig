@@ -1,3 +1,4 @@
+#![warn(clippy::all)]
 use std::path::Path;
 extern crate dirs;
 #[macro_use]
@@ -9,47 +10,49 @@ extern crate failure;
 use failure::Error;
 
 mod errors;
-use errors::{other_error, ConfigError};
+use errors::{ConfigError};
 mod deserializers;
 use deserializers::from_base64;
 use std::collections::HashMap;
 mod utils;
+mod incluster;
 
 use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
 use std::process::Command;
 
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct Preferences {
-    colors: Option<bool>,
-    extensions: Extensions,
+pub struct Preferences {
+    pub colors: Option<bool>,
+    pub extensions: Extensions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct Cluster {
-    server: String,
-    insecure_skip_tls_verify: Option<bool>,
-    certificate_authority: Option<String>,
+pub struct Cluster {
+    pub server: String,
+    pub insecure_skip_tls_verify: Option<bool>,
+    pub certificate_authority: Option<String>,
     #[serde(default, deserialize_with = "from_base64")]
-    certificate_authority_data: Option<Vec<u8>>,
-    extensions: Extensions,
+    pub certificate_authority_data: Option<Vec<u8>>,
+    pub extensions: Extensions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct Context {
-    cluster: String,
-    auth_info: Option<String>, // may become &AuthInfo but everything will be lifetime-tied
-    namespace: Option<String>,
-    extensions: Extensions,
+pub struct Context {
+    pub cluster: String,
+    pub auth_info: Option<String>, // may become &AuthInfo but everything will be lifetime-tied
+    pub namespace: Option<String>,
+    pub extensions: Extensions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct AuthProviderConfig {
-    name: String,
-    config: Option<HashMap<String, String>>,
+pub struct AuthProviderConfig {
+    pub name: String,
+    pub config: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,39 +77,16 @@ pub struct ExecCredentialStatus {
     pub client_key_data: Option<String>,
 }
 
-// type ExecConfig struct {
-//     // Command to execute.
-//     Command string `json:"command"`
-//     // Arguments to pass to the command when executing it.
-//     // +optional
-//     Args []string `json:"args"`
-//     // Env defines additional environment variables to expose to the process. These
-//     // are unioned with the host's environment, as well as variables client-go uses
-//     // to pass argument to the plugin.
-//     // +optional
-//     Env []ExecEnvVar `json:"env"`
-
-//     // Preferred input version of the ExecInfo. The returned ExecCredentials MUST use
-//     // the same encoding version as the input.
-//     APIVersion string `json:"apiVersion,omitempty"`
-// }
+pub type ExecEnvVars = HashMap<String, String>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct KeyValuePair {
-    name: String,
-    value: String,
-}
-
-type ExecEnvVars = Vec<KeyValuePair>;
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct ExecConfig {
-    command: String,
-    args: Option<Vec<String>>,
-    env: Option<ExecEnvVars>,
-    api_version: Option<String>,
+pub struct ExecConfig {
+    pub command: String,
+    pub args: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserializers::value")]
+    pub env: ExecEnvVars,
+    pub api_version: Option<String>,
 }
 
 impl ExecConfig {
@@ -115,13 +95,9 @@ impl ExecConfig {
         if let Some(args) = &self.args {
             cmd.args(args);
         };
-        // @TODO: fixme
-        if let Some(env) = &self.env {
-            cmd.envs(
-                env.into_iter()
-                    .map(|ref kvpair| (kvpair.name.clone(), kvpair.value.clone()))
-                    .collect::<HashMap<String, String>>(),
-            );
+
+        if !&self.env.is_empty() {
+            cmd.envs(&self.env);
         }
         let out = cmd
             .output()
@@ -131,35 +107,34 @@ impl ExecConfig {
             dbg!(&error);
             return Err(ConfigError::ExecError(error));
         }
-        let result = serde_json::from_slice(&out.stdout).map_err(|e| {
+        serde_json::from_slice(&out.stdout).map_err(|e| {
             ConfigError::ExecError(format!("Unable to deserialize json: {}", e.to_string()))
-        });
-        result
+        })
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct AuthInfo {
-    client_certificate: Option<String>,
+pub struct AuthInfo {
+    pub client_certificate: Option<String>,
     #[serde(default, deserialize_with = "from_base64")]
-    client_certificate_data: Option<Vec<u8>>,
-    client_key: Option<String>,
-    client_key_data: Option<String>,
-    token: Option<String>,
-    token_file: Option<String>, // maybe Path
+    pub client_certificate_data: Option<Vec<u8>>,
+    pub client_key: Option<String>,
+    pub client_key_data: Option<String>,
+    pub token: Option<String>,
+    pub token_file: Option<String>, // maybe Path
     #[serde(rename = "act-as")]
-    impersonate: Option<String>,
+    pub impersonate: Option<String>,
     #[serde(rename = "act-as-groups")]
-    impersonate_groups: Option<Vec<String>>,
+    pub impersonate_groups: Option<Vec<String>>,
     #[serde(rename = "act-as-user-extra")]
-    impersonate_user_extra: Option<HashMap<String, String>>,
-    username: Option<String>,
-    password: Option<String>,
-    auth_provider: Option<AuthProviderConfig>,
+    pub impersonate_user_extra: Option<HashMap<String, String>>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub auth_provider: Option<AuthProviderConfig>,
     #[serde(rename = "exec")]
-    exec_config: Option<ExecConfig>,
-    extensions: Extensions,
+    pub exec_config: Option<ExecConfig>,
+    pub extensions: Extensions,
 }
 
 impl AuthInfo {
@@ -169,9 +144,8 @@ impl AuthInfo {
         } else if let Some(cert_file) = &self.client_certificate {
             utils::load_ca_from_file(cert_file)
         } else {
-            Err(ConfigError::Other {
-                cause: "Missing both client_certificate_data and client_certificate".to_owned(),
-            })
+            Err(ConfigError::MissingData("Missing both client_certificate_data and 
+            client_certificate".to_owned()))
         }
     }
 
@@ -181,9 +155,8 @@ impl AuthInfo {
         } else if let Some(key_file) = &self.client_key {
             utils::load_ca_from_file(key_file)
         } else {
-            Err(ConfigError::Other {
-                cause: "Missing both client_key_data and client_key".to_owned(),
-            })
+            Err(ConfigError::MissingData("Missing both client_key_data and client_key".to_owned()
+            ))
         }
     }
 
@@ -198,31 +171,29 @@ impl AuthInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct Extension;
+pub struct Extension;
 
-type Extensions = Option<HashMap<String, Extension>>;
+pub type Extensions = Option<HashMap<String, Extension>>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct Config {
-    kind: Option<String>,
-    api_version: Option<String>,
-    preferences: Preferences,
+pub struct Config {
+    pub kind: Option<String>,
+    pub api_version: Option<String>,
+    pub preferences: Preferences,
     #[serde(default, deserialize_with = "deserializers::cluster_de")]
-    clusters: HashMap<String, Cluster>,
+    pub clusters: HashMap<String, Cluster>,
     #[serde(
         default,
         deserialize_with = "deserializers::auth_info_de",
         rename = "users"
     )]
-    auth_infos: HashMap<String, AuthInfo>,
+    pub auth_infos: HashMap<String, AuthInfo>,
     #[serde(deserialize_with = "deserializers::context_de")]
-    contexts: HashMap<String, Context>,
-    current_context: String,
-    extensions: Extensions,
+    pub contexts: HashMap<String, Context>,
+    pub current_context: String,
+    pub extensions: Extensions,
 }
-
-use std::collections::hash_map::Iter;
 
 impl Config {
     pub fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config, Error> {
@@ -243,11 +214,11 @@ impl Config {
         a
     }
 
-    pub fn merge_with(mut self, config: Config) -> Result<Config, Error> {
+    pub fn merge_with(mut self, config: Config) -> Config {
         self.clusters = Config::merge_hashmap(self.clusters, config.clusters);
         self.auth_infos = Config::merge_hashmap(self.auth_infos, config.auth_infos);
         self.contexts = Config::merge_hashmap(self.contexts, config.contexts);
-        Ok(self)
+        self
     }
 
     pub fn load<T: AsRef<Path>>(filename: Option<T>) -> Result<Config, Error> {
@@ -265,30 +236,21 @@ impl Config {
                             loaded_config
                                 .take()
                                 .unwrap()
-                                .merge_with(Config::load_from_file(path)?)?,
+                                .merge_with(Config::load_from_file(path)?),
                         );
                     }
                 }
-                loaded_config.ok_or(
-                    ConfigError::Other {
-                        cause: "Something bad happened".to_owned(),
-                    }
-                    .into(),
+                loaded_config.ok_or_else(||
+                    ConfigError::LoadingError("Cannot load config".to_owned()).into()
                 )
             } else if let Ok(kubeconfig) = utils::find_kubeconfig() {
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
                 } else {
-                    Err(ConfigError::Other {
-                        cause: "Cannot find config to load".to_owned(),
-                    }
-                    .into())
+                    Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()).into())
                 }
             } else {
-                Err(ConfigError::Other {
-                    cause: "Cannot find config to load".to_owned(),
-                }
-                .into())
+                Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()).into())
             }
         }
     }
@@ -304,22 +266,20 @@ impl Config {
     pub fn load_certificate_authority(&self) -> Result<Vec<u8>, ConfigError> {
         if let Some(cluster) = self.get_current() {
             if let Some(ca_file) = &cluster.certificate_authority {
-                return utils::load_ca_from_file(ca_file);
+                utils::load_ca_from_file(ca_file)
             } else if let Some(ca_data) = &cluster.certificate_authority_data {
-                return Ok(ca_data.to_vec());
+                Ok(ca_data.to_vec())
             } else {
-                return Err(other_error("No ca data or file found"));
+                Err(ConfigError::MissingData("No CA data nor file found".to_owned()))
             }
         } else {
-            return Err(other_error("No ca data or file found"));
+            Err(ConfigError::DoesntExist("No current cluster was found".to_owned()))
         }
     }
 
     pub fn ca_bundle(&self) -> Result<Vec<X509>, ConfigError> {
-        let bundle = self
-            .load_certificate_authority()
-            .map_err(|e| ConfigError::SSLError(e.to_string()))?;
-        X509::stack_from_pem(&bundle).map_err(|e| ConfigError::SSLError(e.to_string()))
+        let bundle = self.load_certificate_authority()?;
+        X509::stack_from_pem(&bundle).map_err(|e| e.into())
     }
 }
 
@@ -341,7 +301,7 @@ mod tests {
         Config::load(Some(manifest_dir))
     }
 
-    fn patch_exec_command<'a>(ec: &'a mut ExecConfig) -> &'a ExecConfig {
+    fn patch_exec_command(ec: &mut ExecConfig) -> &ExecConfig {
         let mut exe = get_fixtures_dir();
         if cfg!(target_os = "windows") {
             exe.push("mock-aws.ps1");

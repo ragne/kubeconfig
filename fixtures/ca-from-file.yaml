@@ -11,7 +11,7 @@ contexts:
 - context:
     cluster: my-cluster
     namespace: frontend
-    user: green-user
+    user: developer
   name: my-context
 users:
 - name: green-user
