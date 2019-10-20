@@ -16,10 +16,11 @@ use deserializers::from_base64;
 use std::collections::HashMap;
 mod utils;
 mod incluster;
+pub mod client;
 
 use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
 use std::process::Command;
-
+use errors::Result;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -90,7 +91,7 @@ pub struct ExecConfig {
 }
 
 impl ExecConfig {
-    pub fn exec(&self) -> Result<ExecCredential, ConfigError> {
+    pub fn exec(&self) -> Result<ExecCredential> {
         let mut cmd = Command::new(&self.command);
         if let Some(args) = &self.args {
             cmd.args(args);
@@ -138,7 +139,7 @@ pub struct AuthInfo {
 }
 
 impl AuthInfo {
-    pub fn get_client_certificate(&self) -> Result<Vec<u8>, ConfigError> {
+    pub fn get_client_certificate(&self) -> Result<Vec<u8>> {
         if let Some(cert_data) = &self.client_certificate_data {
             utils::b64decode(&cert_data)
         } else if let Some(cert_file) = &self.client_certificate {
@@ -149,7 +150,7 @@ impl AuthInfo {
         }
     }
 
-    pub fn get_client_key(&self) -> Result<Vec<u8>, ConfigError> {
+    pub fn get_client_key(&self) -> Result<Vec<u8>> {
         if let Some(key_data) = &self.client_key_data {
             utils::b64decode(key_data.as_bytes())
         } else if let Some(key_file) = &self.client_key {
@@ -160,7 +161,7 @@ impl AuthInfo {
         }
     }
 
-    pub fn get_pkcs12(&self, password: &str) -> Result<Pkcs12, ConfigError> {
+    pub fn get_pkcs12(&self, password: &str) -> Result<Pkcs12> {
         let client_cert = &self.get_client_certificate()?;
         let client_key = &self.get_client_key()?;
         let x509 = X509::from_pem(&client_cert)?;
@@ -196,12 +197,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config, Error> {
+    pub fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config> {
         let f = std::fs::File::open(name)?;
         Ok(serde_yaml::from_reader(f)?)
     }
 
-    pub fn load_from_data(data: &[u8]) -> Result<Config, Error> {
+    pub fn load_from_data(data: &[u8]) -> Result<Config> {
         Ok(serde_yaml::from_slice(data)?)
     }
 
@@ -221,7 +222,7 @@ impl Config {
         self
     }
 
-    pub fn load<T: AsRef<Path>>(filename: Option<T>) -> Result<Config, Error> {
+    pub fn load<T: AsRef<Path>>(filename: Option<T>) -> Result<Config> {
         if let Some(filename) = filename {
             Config::load_from_file(filename)
         } else {
@@ -263,7 +264,26 @@ impl Config {
         }
     }
 
-    pub fn load_certificate_authority(&self) -> Result<Vec<u8>, ConfigError> {
+
+    pub fn set_current_by_cluster(&mut self, cluster_name: &str) -> bool {
+        if let Some((k, ref v)) = self.contexts.iter().find(|(_, v)| v.cluster == cluster_name) {
+            self.current_context = k.to_owned();
+            true
+        } else {false}
+    }
+    
+    
+    pub fn set_current_by_user(&mut self, user_name: &str) -> bool {
+        if let Some((k, ref v)) = self.auth_infos.iter()
+        .find(|(_, ref v)| if let Some(ref username) = v.username{ username == user_name} else {false}) {
+            self.current_context = k.to_owned();
+            true
+        } else {false}
+    }
+    
+    
+
+    pub fn load_certificate_authority(&self) -> Result<Vec<u8>> {
         if let Some(cluster) = self.get_current() {
             if let Some(ca_file) = &cluster.certificate_authority {
                 utils::load_ca_from_file(ca_file)
@@ -277,9 +297,19 @@ impl Config {
         }
     }
 
-    pub fn ca_bundle(&self) -> Result<Vec<X509>, ConfigError> {
+    pub fn ca_bundle(&self) -> Result<Vec<X509>> {
         let bundle = self.load_certificate_authority()?;
         X509::stack_from_pem(&bundle).map_err(|e| e.into())
+    }
+}
+
+pub struct ConfigBuilder(Config);
+
+impl ConfigBuilder {
+    pub fn new() -> Result<Self> {
+        Ok(Self (
+            Config::load(None::<&Path>)?
+        ))
     }
 }
 
@@ -295,7 +325,7 @@ mod tests {
         manifest_dir
     }
 
-    fn load_from_fixture(fixture_name: &str) -> Result<Config, Error> {
+    fn load_from_fixture(fixture_name: &str) -> Result<Config> {
         let mut manifest_dir = get_fixtures_dir();
         manifest_dir.push(fixture_name);
         Config::load(Some(manifest_dir))

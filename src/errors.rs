@@ -1,4 +1,5 @@
 use openssl::error::ErrorStack as opensslError;
+use serde_yaml;
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
 
@@ -19,7 +20,9 @@ pub enum ConfigError {
     #[fail(display = "Cannot load config: {}", _0)]
     LoadingError(String),
     #[fail(display = "Element doesn't exist: {}", _0)]
-    DoesntExist(String)
+    DoesntExist(String),
+    #[fail(display = "Failed to deserialize: {}", _0)]
+    DeserializationError(#[cause] serde_yaml::Error)
 }
 
 impl From<opensslError> for ConfigError {
@@ -37,5 +40,11 @@ impl From<std::io::Error> for ConfigError {
 impl From<base64::DecodeError> for ConfigError {
     fn from(e: base64::DecodeError) -> ConfigError {
         ConfigError::B64DecodeError(e)
+    }
+}
+
+impl From<serde_yaml::Error> for ConfigError {
+    fn from(e: serde_yaml::Error) -> ConfigError {
+        ConfigError::DeserializationError(e)
     }
 }
