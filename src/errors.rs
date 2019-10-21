@@ -1,5 +1,6 @@
 use openssl::error::ErrorStack as opensslError;
 use serde_yaml;
+use reqwest;
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
 
@@ -22,7 +23,9 @@ pub enum ConfigError {
     #[fail(display = "Element doesn't exist: {}", _0)]
     DoesntExist(String),
     #[fail(display = "Failed to deserialize: {}", _0)]
-    DeserializationError(#[cause] serde_yaml::Error)
+    DeserializationError(#[cause] serde_yaml::Error),
+    #[fail(display = "API client underlying error: {}", _0)]
+    ClientError(#[cause] reqwest::Error)
 }
 
 impl From<opensslError> for ConfigError {
@@ -46,5 +49,11 @@ impl From<base64::DecodeError> for ConfigError {
 impl From<serde_yaml::Error> for ConfigError {
     fn from(e: serde_yaml::Error) -> ConfigError {
         ConfigError::DeserializationError(e)
+    }
+}
+
+impl From<reqwest::Error> for ConfigError {
+    fn from(e: reqwest::Error) -> ConfigError {
+        ConfigError::ClientError(e)
     }
 }

@@ -7,7 +7,7 @@ extern crate serde_json;
 extern crate serde_yaml;
 #[macro_use]
 extern crate failure;
-use failure::Error;
+
 
 mod errors;
 use errors::{ConfigError};
@@ -176,6 +176,13 @@ pub struct Extension;
 
 pub type Extensions = Option<HashMap<String, Extension>>;
 
+#[derive(Debug)]
+pub struct CurrentView<'a> {
+    cluster: &'a Cluster,
+    context: &'a Context,
+    auth_info: Option<&'a AuthInfo>
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -257,16 +264,45 @@ impl Config {
     }
 
     pub fn get_current(&self) -> Option<&Cluster> {
-        if let Some(ref context) = self.contexts.get(&self.current_context) {
+        if let Some(context) = self.contexts.get(&self.current_context) {
             self.clusters.get(&context.cluster)
         } else {
             None
         }
     }
 
+    pub fn get_current_view(&self) -> Option<CurrentView> {
+        if !self.current_context.is_empty() {
+            // @TODO: [tidying] remove all unwrap!
+            let current_context = self.contexts.get(&self.current_context).unwrap();
+            let current_auth_info = if let Some(auth_info) = current_context.auth_info.as_ref() {
+                self.auth_infos.get(auth_info)
+            } else { None };
+            let cv = CurrentView {
+                cluster: self.get_current().unwrap(),
+                context: current_context,
+                auth_info: current_auth_info
+            };
+            Some(cv)
+        } else {
+            None
+        }
+        
+    }
+
+    pub fn set_current(&mut self, context_name: &str) -> bool {
+        if let Some(_context) = self.contexts.get(context_name) {
+            self.current_context = context_name.to_owned();
+            true
+        } else {
+            false
+        }
+    }
+
+
 
     pub fn set_current_by_cluster(&mut self, cluster_name: &str) -> bool {
-        if let Some((k, ref v)) = self.contexts.iter().find(|(_, v)| v.cluster == cluster_name) {
+        if let Some((k, _)) = self.contexts.iter().find(|(_, v)| v.cluster == cluster_name) {
             self.current_context = k.to_owned();
             true
         } else {false}
@@ -274,7 +310,7 @@ impl Config {
     
     
     pub fn set_current_by_user(&mut self, user_name: &str) -> bool {
-        if let Some((k, ref v)) = self.auth_infos.iter()
+        if let Some((k,_)) = self.auth_infos.iter()
         .find(|(_, ref v)| if let Some(ref username) = v.username{ username == user_name} else {false}) {
             self.current_context = k.to_owned();
             true
@@ -319,13 +355,13 @@ mod tests {
     use std::env;
     use std::path::PathBuf;
 
-    fn get_fixtures_dir() -> PathBuf {
+    pub(crate) fn get_fixtures_dir() -> PathBuf {
         let mut manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         manifest_dir.push("fixtures");
         manifest_dir
     }
 
-    fn load_from_fixture(fixture_name: &str) -> Result<Config> {
+    pub(crate) fn load_from_fixture(fixture_name: &str) -> Result<Config> {
         let mut manifest_dir = get_fixtures_dir();
         manifest_dir.push(fixture_name);
         Config::load(Some(manifest_dir))
