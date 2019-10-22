@@ -249,16 +249,16 @@ impl Config {
                     }
                 }
                 loaded_config.ok_or_else(||
-                    ConfigError::LoadingError("Cannot load config".to_owned()).into()
+                    ConfigError::LoadingError("Cannot load config".to_owned())
                 )
             } else if let Ok(kubeconfig) = utils::find_kubeconfig() {
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
                 } else {
-                    Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()).into())
+                    Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()))
                 }
             } else {
-                Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()).into())
+                Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()))
             }
         }
     }
@@ -271,22 +271,25 @@ impl Config {
         }
     }
 
-    pub fn get_current_view(&self) -> Option<CurrentView> {
-        if !self.current_context.is_empty() {
-            // @TODO: [tidying] remove all unwrap!
-            let current_context = self.contexts.get(&self.current_context).unwrap();
-            let current_auth_info = if let Some(auth_info) = current_context.auth_info.as_ref() {
+    pub fn get_view(&self, context_name: &str) -> Option<CurrentView> {
+        
+        if let Some(context) = self.contexts.get(context_name) {
+            let auth_info = if let Some(auth_info) = context.auth_info.as_ref() {
                 self.auth_infos.get(auth_info)
             } else { None };
-            let cv = CurrentView {
-                cluster: self.get_current().unwrap(),
-                context: current_context,
-                auth_info: current_auth_info
-            };
+            let cluster = self.get_current();
+        let cv = CurrentView {
+            cluster: cluster?, 
+            context,
+            auth_info
+        };
             Some(cv)
-        } else {
-            None
-        }
+        } else { None }
+        
+    }
+
+    pub fn get_current_view(&self) -> Option<CurrentView> {
+        self.get_view(&self.current_context)
         
     }
 
@@ -428,6 +431,27 @@ mod tests {
                 Some(())
             })
             .unwrap()
+    }
+
+    #[test]
+    fn should_set_current() {
+        let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
+        assert!(c.set_current("cluster2"));
+        assert!(c.current_context == "cluster2");
+    }
+
+    #[test]
+    fn should_set_current_by_user() {
+        let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
+        assert!(c.set_current_by_user("cluster2"));
+        assert!(c.current_context == "cluster2");
+    }
+
+    #[test]
+    fn should_set_current_by_cluster() {
+        let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
+        assert!(c.set_current_by_cluster("cluster2"));
+        assert!(c.current_context == "cluster2");
     }
 
     #[test]
