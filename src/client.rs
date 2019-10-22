@@ -9,7 +9,13 @@ pub struct KubeClient {
     config: Option<Config>,
 }
 
-impl KubeClient {
+pub struct KubeClientBuilder {
+    namespace: String,
+    client: Client,
+    config: Option<Config>,
+}
+
+impl KubeClientBuilder {
     pub fn new(client: Client) -> Self {
         Self::with_namespace(client, "default".to_string())
     }
@@ -27,24 +33,30 @@ impl KubeClient {
         self
     }
 
-    pub fn with_context(mut self, context_name: &str) -> Self {
+    #[doc(hidden)]
+    fn __with_config<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(&mut Config) -> bool,
+    {
         if let Some(config) = self.config.as_mut() {
-            config.set_current(context_name);
+            f(config)
+        } else {
+            false
         }
+    }
+
+    pub fn with_context(mut self, context_name: &str) -> Self {
+        self.__with_config(|c| c.set_current(context_name));
         self
     }
 
     pub fn with_cluster(mut self, cluster_name: &str) -> Self {
-        if let Some(config) = self.config.as_mut() {
-            config.set_current_by_cluster(cluster_name);
-        }
+        self.__with_config(|c| c.set_current_by_cluster(cluster_name));
         self
     }
 
     pub fn with_user(mut self, user_name: &str) -> Self {
-        if let Some(config) = self.config.as_mut() {
-            config.set_current_by_user(user_name);
-        }
+        self.__with_config(|c| c.set_current_by_user(user_name));
         self
     }
 
@@ -83,11 +95,14 @@ impl KubeClient {
         }
     }
 
-    pub fn build(mut self) -> Result<Self> {
-        // @TODO: probably should be split into builder and client, this one should return client
-        // and belong to a builder
+    #[must_use]
+    pub fn build(mut self) -> Result<KubeClient> {
         self.init_client()?;
-        Ok(self)
+        Ok(KubeClient {
+            client: self.client,
+            config: self.config,
+            namespace: self.namespace,
+        })
     }
 }
 
@@ -101,9 +116,10 @@ mod tests {
     fn should_build_client() {
         let config = load_from_fixture("ca-from-file.yaml").unwrap();
         let http_client = Client::new();
-        let kube_client = KubeClient::new(http_client)
+        let kube_client = KubeClientBuilder::new(http_client)
             .with_config(config)
             .with_cluster("my-cluster")
+            .with_context("my-cluster")
             .build();
         assert!(kube_client.is_ok(), kube_client.err());
     }

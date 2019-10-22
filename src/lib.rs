@@ -44,6 +44,7 @@ pub struct Cluster {
 #[serde(rename_all = "kebab-case")]
 pub struct Context {
     pub cluster: String,
+    #[serde(rename = "user")]
     pub auth_info: Option<String>, // may become &AuthInfo but everything will be lifetime-tied
     pub namespace: Option<String>,
     pub extensions: Extensions,
@@ -311,13 +312,20 @@ impl Config {
         } else {false}
     }
     
-    
+    /// Sets current context to one that matches `user` field and has an existing entry in `users` section
     pub fn set_current_by_user(&mut self, user_name: &str) -> bool {
-        if let Some((k,_)) = self.auth_infos.iter()
-        .find(|(_, ref v)| if let Some(ref username) = v.username{ username == user_name} else {false}) {
-            self.current_context = k.to_owned();
-            true
-        } else {false}
+        if self.auth_infos.contains_key(user_name) {
+            if let Some(context) = self.contexts.iter().find(|(_,v)| {
+                if let Some(ref username) = v.auth_info {username == user_name} else {false}
+            }) {
+                self.current_context = context.0.to_owned();
+                true
+            } else {
+                false
+            }
+        } else { 
+            false
+        }
     }
     
     
@@ -452,6 +460,15 @@ mod tests {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
         assert!(c.set_current_by_cluster("cluster2"));
         assert!(c.current_context == "cluster2");
+    }
+
+    #[test]
+    fn should_fail_set_non_existing_values() {
+        let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
+        assert!(!c.set_current_by_cluster("non-existing"));
+        assert!(!c.set_current_by_user("non-existing"));
+        assert!(!c.set_current("non-existing"));
+        assert!(c.current_context == "cluster1");
     }
 
     #[test]
