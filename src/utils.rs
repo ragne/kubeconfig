@@ -1,11 +1,11 @@
 use crate::errors::{ConfigError, Result};
+use base64;
 use dirs::home_dir;
 use std::convert::TryInto;
 use std::env;
 use std::fs::{metadata, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use base64;
 
 const KUBECONFIG: &str = "KUBECONFIG";
 
@@ -62,12 +62,10 @@ pub(crate) fn load_ca_from_file<P: AsRef<Path>>(filename: P) -> Result<Vec<u8>> 
         //
         default_kube_dir()
             .and_then(|dir| Some(dir.join(filename)))
-            .ok_or_else(|| ConfigError::LoadingError(
-                format!("Cannot load file {}", filename.display())
-            ))?
+            .ok_or_else(|| {
+                ConfigError::LoadingError(format!("Cannot load file {}", filename.display()))
+            })?
     };
 
     load_file(filename)
 }
-
-

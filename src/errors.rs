@@ -1,6 +1,6 @@
 use openssl::error::ErrorStack as opensslError;
-use serde_yaml;
 use reqwest;
+use serde_yaml;
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
 
@@ -25,7 +25,7 @@ pub enum ConfigError {
     #[fail(display = "Failed to deserialize: {}", _0)]
     DeserializationError(#[cause] serde_yaml::Error),
     #[fail(display = "API client underlying error: {}", _0)]
-    ClientError(#[cause] reqwest::Error)
+    ClientError(#[cause] reqwest::Error),
 }
 
 impl From<opensslError> for ConfigError {

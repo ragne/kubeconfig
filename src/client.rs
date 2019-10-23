@@ -34,30 +34,32 @@ impl KubeClientBuilder {
     }
 
     #[doc(hidden)]
-    fn __with_config<F>(&mut self, f: F) -> bool
+    fn __with_config<F, T>(&mut self, f: F) -> Result<T>
     where
-        F: FnOnce(&mut Config) -> bool,
+        F: FnOnce(&mut Config) -> Result<T>,
     {
         if let Some(config) = self.config.as_mut() {
             f(config)
         } else {
-            false
+            Err(ConfigError::DoesntExist(
+                "Config hasn't been initialized".to_owned(),
+            ))
         }
     }
 
-    pub fn with_context(mut self, context_name: &str) -> Self {
-        self.__with_config(|c| c.set_current(context_name));
-        self
+    pub fn with_context(mut self, context_name: &str) -> Result<Self> {
+        self.__with_config(|c| c.set_current(context_name))?;
+        Ok(self)
     }
 
-    pub fn with_cluster(mut self, cluster_name: &str) -> Self {
-        self.__with_config(|c| c.set_current_by_cluster(cluster_name));
-        self
+    pub fn with_cluster(mut self, cluster_name: &str) -> Result<Self> {
+        self.__with_config(|c| c.set_current_by_cluster(cluster_name))?;
+        Ok(self)
     }
 
-    pub fn with_user(mut self, user_name: &str) -> Self {
-        self.__with_config(|c| c.set_current_by_user(user_name));
-        self
+    pub fn with_user(mut self, user_name: &str) -> Result<Self> {
+        self.__with_config(|c| c.set_current_by_user(user_name))?;
+        Ok(self)
     }
 
     fn init_client(&mut self) -> Result<()> {
@@ -119,8 +121,9 @@ mod tests {
         let kube_client = KubeClientBuilder::new(http_client)
             .with_config(config)
             .with_cluster("my-cluster")
-            .with_context("my-cluster")
-            .build();
-        assert!(kube_client.is_ok(), kube_client.err());
+            .and_then(|c| c.with_context("my-context"))
+            .and_then(|c| c.build());
+
+        assert!(kube_client.is_ok(), format!("{:?}", kube_client.err()));
     }
 }

@@ -14,14 +14,10 @@ fn load_ca() -> Result<X509> {
 
 pub fn load_default_ns() -> Result<String> {
     utils::load_file(K8S_DEFAULT_NS)
-        .and_then(|r| String::from_utf8(r).
-            map_err(|e| ConfigError::LoadingError(e.to_string()))
-        )
+        .and_then(|r| String::from_utf8(r).map_err(|e| ConfigError::LoadingError(e.to_string())))
 }
 
 pub fn load_token() -> Result<String> {
     utils::load_file(K8S_TOKENFILE)
-    .and_then(|r| String::from_utf8(r).
-        map_err(|e| ConfigError::LoadingError(e.to_string()))
-    )
+        .and_then(|r| String::from_utf8(r).map_err(|e| ConfigError::LoadingError(e.to_string())))
 }

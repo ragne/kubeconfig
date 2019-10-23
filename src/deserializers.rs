@@ -41,7 +41,7 @@ macro_rules! deserializer_for {
 deserializer_for!(cluster, cluster_de);
 deserializer_for!(context, context_de);
 deserializer_for!(user, auth_info_de);
-// This is a hack for macro reuse to generate auto Deserialize for 
+// This is a hack for macro reuse to generate auto Deserialize for
 // struct KeyValuePair {
 //     name: String,
 //     value: String,

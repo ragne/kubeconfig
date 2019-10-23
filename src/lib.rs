@@ -8,19 +8,18 @@ extern crate serde_yaml;
 #[macro_use]
 extern crate failure;
 
-
 mod errors;
-use errors::{ConfigError};
+use errors::ConfigError;
 mod deserializers;
 use deserializers::from_base64;
 use std::collections::HashMap;
-mod utils;
-mod incluster;
 pub mod client;
+mod incluster;
+mod utils;
 
+use errors::Result;
 use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
 use std::process::Command;
-use errors::Result;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -146,8 +145,11 @@ impl AuthInfo {
         } else if let Some(cert_file) = &self.client_certificate {
             utils::load_ca_from_file(cert_file)
         } else {
-            Err(ConfigError::MissingData("Missing both client_certificate_data and 
-            client_certificate".to_owned()))
+            Err(ConfigError::MissingData(
+                "Missing both client_certificate_data and 
+            client_certificate"
+                    .to_owned(),
+            ))
         }
     }
 
@@ -157,7 +159,8 @@ impl AuthInfo {
         } else if let Some(key_file) = &self.client_key {
             utils::load_ca_from_file(key_file)
         } else {
-            Err(ConfigError::MissingData("Missing both client_key_data and client_key".to_owned()
+            Err(ConfigError::MissingData(
+                "Missing both client_key_data and client_key".to_owned(),
             ))
         }
     }
@@ -181,7 +184,7 @@ pub type Extensions = Option<HashMap<String, Extension>>;
 pub struct CurrentView<'a> {
     cluster: &'a Cluster,
     context: &'a Context,
-    auth_info: Option<&'a AuthInfo>
+    auth_info: Option<&'a AuthInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,6 +208,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn default() -> Result<Config> {
+        Config::load(None::<&Path>)
+    }
+
     pub fn load_from_file<T: AsRef<Path>>(name: T) -> Result<Config> {
         let f = std::fs::File::open(name)?;
         Ok(serde_yaml::from_reader(f)?)
@@ -249,17 +256,20 @@ impl Config {
                         );
                     }
                 }
-                loaded_config.ok_or_else(||
-                    ConfigError::LoadingError("Cannot load config".to_owned())
-                )
+                loaded_config
+                    .ok_or_else(|| ConfigError::LoadingError("Cannot load config".to_owned()))
             } else if let Ok(kubeconfig) = utils::find_kubeconfig() {
                 if kubeconfig.exists() {
                     Config::load_from_file(kubeconfig)
                 } else {
-                    Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()))
+                    Err(ConfigError::LoadingError(
+                        "Cannot load config: cannot find kubeconfig to load".to_owned(),
+                    ))
                 }
             } else {
-                Err(ConfigError::LoadingError("Cannot load config: cannot find kubeconfig to load".to_owned()))
+                Err(ConfigError::LoadingError(
+                    "Cannot load config: cannot find kubeconfig to load".to_owned(),
+                ))
             }
         }
     }
@@ -273,62 +283,69 @@ impl Config {
     }
 
     pub fn get_view(&self, context_name: &str) -> Option<CurrentView> {
-        
         if let Some(context) = self.contexts.get(context_name) {
             let auth_info = if let Some(auth_info) = context.auth_info.as_ref() {
                 self.auth_infos.get(auth_info)
-            } else { None };
+            } else {
+                None
+            };
             let cluster = self.get_current();
-        let cv = CurrentView {
-            cluster: cluster?, 
-            context,
-            auth_info
-        };
+            let cv = CurrentView {
+                cluster: cluster?,
+                context,
+                auth_info,
+            };
             Some(cv)
-        } else { None }
-        
+        } else {
+            None
+        }
     }
 
     pub fn get_current_view(&self) -> Option<CurrentView> {
         self.get_view(&self.current_context)
-        
     }
 
-    pub fn set_current(&mut self, context_name: &str) -> bool {
+    pub fn set_current(&mut self, context_name: &str) -> Result<()> {
         if let Some(_context) = self.contexts.get(context_name) {
             self.current_context = context_name.to_owned();
-            true
+            Ok(())
         } else {
-            false
+            Err(ConfigError::DoesntExist(format!("Context with name {} doesn't exist", context_name)))
         }
     }
 
-
-
-    pub fn set_current_by_cluster(&mut self, cluster_name: &str) -> bool {
-        if let Some((k, _)) = self.contexts.iter().find(|(_, v)| v.cluster == cluster_name) {
+    pub fn set_current_by_cluster(&mut self, cluster_name: &str) -> Result<()> {
+        if let Some((k, _)) = self
+            .contexts
+            .iter()
+            .find(|(_, v)| v.cluster == cluster_name)
+        {
             self.current_context = k.to_owned();
-            true
-        } else {false}
+            Ok(())
+        } else {
+            Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", cluster_name)))
+        }
     }
-    
+
     /// Sets current context to one that matches `user` field and has an existing entry in `users` section
-    pub fn set_current_by_user(&mut self, user_name: &str) -> bool {
+    pub fn set_current_by_user(&mut self, user_name: &str) -> Result<()> {
         if self.auth_infos.contains_key(user_name) {
-            if let Some(context) = self.contexts.iter().find(|(_,v)| {
-                if let Some(ref username) = v.auth_info {username == user_name} else {false}
+            if let Some(context) = self.contexts.iter().find(|(_, v)| {
+                if let Some(ref username) = v.auth_info {
+                    username == user_name
+                } else {
+                    false
+                }
             }) {
                 self.current_context = context.0.to_owned();
-                true
+                Ok(())
             } else {
-                false
+                Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", user_name)))
             }
-        } else { 
-            false
+        } else {
+            Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", user_name)))
         }
     }
-    
-    
 
     pub fn load_certificate_authority(&self) -> Result<Vec<u8>> {
         if let Some(cluster) = self.get_current() {
@@ -337,10 +354,14 @@ impl Config {
             } else if let Some(ca_data) = &cluster.certificate_authority_data {
                 Ok(ca_data.to_vec())
             } else {
-                Err(ConfigError::MissingData("No CA data nor file found".to_owned()))
+                Err(ConfigError::MissingData(
+                    "No CA data nor file found".to_owned(),
+                ))
             }
         } else {
-            Err(ConfigError::DoesntExist("No current cluster was found".to_owned()))
+            Err(ConfigError::DoesntExist(
+                "No current cluster was found".to_owned(),
+            ))
         }
     }
 
@@ -354,9 +375,7 @@ pub struct ConfigBuilder(Config);
 
 impl ConfigBuilder {
     pub fn new() -> Result<Self> {
-        Ok(Self (
-            Config::load(None::<&Path>)?
-        ))
+        Ok(Self(Config::load(None::<&Path>)?))
     }
 }
 
@@ -444,30 +463,30 @@ mod tests {
     #[test]
     fn should_set_current() {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
-        assert!(c.set_current("cluster2"));
+        assert!(c.set_current("cluster2").is_ok());
         assert!(c.current_context == "cluster2");
     }
 
     #[test]
     fn should_set_current_by_user() {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
-        assert!(c.set_current_by_user("cluster2"));
+        assert!(c.set_current_by_user("cluster2").is_ok());
         assert!(c.current_context == "cluster2");
     }
 
     #[test]
     fn should_set_current_by_cluster() {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
-        assert!(c.set_current_by_cluster("cluster2"));
+        assert!(c.set_current_by_cluster("cluster2").is_ok());
         assert!(c.current_context == "cluster2");
     }
 
     #[test]
     fn should_fail_set_non_existing_values() {
         let mut c = load_from_fixture("ca-from-data.yaml").unwrap();
-        assert!(!c.set_current_by_cluster("non-existing"));
-        assert!(!c.set_current_by_user("non-existing"));
-        assert!(!c.set_current("non-existing"));
+        assert!(c.set_current_by_cluster("non-existing").is_err());
+        assert!(c.set_current_by_user("non-existing").is_err());
+        assert!(c.set_current("non-existing").is_err());
         assert!(c.current_context == "cluster1");
     }
 
@@ -495,7 +514,7 @@ mod tests {
 
     #[test]
     fn should_try_to_load_default() {
-        let config = Config::load(None::<&Path>);
+        let config = Config::default();
         match config {
             Ok(config) => println!("config: {:?}", config),
             Err(e) => {
