@@ -1,12 +1,12 @@
 use crate::errors::{ConfigError, Result};
-use crate::{Config, Context};
+use crate::{Config, Context, CurrentView};
 use failure::format_err;
 use reqwest::{header, Certificate, Client, ClientBuilder, Identity};
 
 pub struct KubeClient {
     pub namespace: String,
     client: Client,
-    config: Option<Config>,
+    config: Config,
 }
 
 pub struct KubeClientBuilder {
@@ -62,6 +62,75 @@ impl KubeClientBuilder {
         Ok(self)
     }
 
+    fn set_auth_headers(current_view: &CurrentView, headers: &mut reqwest::header::HeaderMap<reqwest::header::HeaderValue>) -> Result<()> {
+        let token = match current_view.auth_info {
+            None => None,
+            Some(ai) => {
+                let token = ai.get_client_token().or_else(|_| {
+                    // if nothing was found in auth_info, check exec
+                    if let Some(ref ec) = ai.exec_config {
+                        ec.exec().map(|cred| {
+                            let status = cred.status.ok_or_else(|| {
+                                ConfigError::MissingData(
+                                    "exec did not return \"status\" field".to_owned(),
+                                )
+                            })?;
+
+                            match status.token {
+                                Some(token) => Ok(token.as_bytes().to_vec()),
+                                None => Err(ConfigError::MissingData(
+                                    "Missing both token and token_file".to_owned(),
+                                )),
+                            }
+                        })?
+                    } else {
+                        Err(ConfigError::MissingData(
+                            "Missing both token and token_file".to_owned(),
+                        ))
+                    }
+                })?;
+                Some(token)
+            }
+        };
+        let (username, password) = match current_view.auth_info {
+            None => (None, None),
+            Some(ai) => match (&ai.username, &ai.password) {
+                (Some(u), Some(p)) => (Some(u.clone()), Some(p.clone())),
+                (Some(u), None) => (Some(u.clone()), Some("".to_owned())),
+                _ => (None, None), // doesn't make sense to have a password without username
+            },
+        };
+        match (token, (username, password)) {
+            (Some(token), (_, _)) => {
+                headers.insert(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_str(&format!(
+                        "Bearer {}",
+                        String::from_utf8_lossy(&token)
+                    ))
+                    .map_err(|_| {
+                        ConfigError::LoadingError("Invalid bearer token".to_owned())
+                    })?,
+                );
+            }
+            (None, (Some(username), Some(password))) => {
+                let encoded = base64::encode(&format!("{}:{}", username, password));
+                headers.insert(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_str(&format!("Basic {}", encoded)).map_err(
+                        |_| {
+                            ConfigError::LoadingError(
+                                "Cannot encode basic auth credentials".to_owned(),
+                            )
+                        },
+                    )?,
+                );
+            }
+            _ => {}
+        };
+        Ok(())
+    }
+
     fn init_client(&mut self) -> Result<()> {
         let mut client_builder = Client::builder();
         if self.config.is_none() {
@@ -82,7 +151,7 @@ impl KubeClientBuilder {
                         client_builder = client_builder.identity(req_p12);
                     }
                     Err(_) => {
-                        // last resort only if configs ask for it, and no client certs
+                        // if config explicitly specifies doing so
                         if let Some(true) = &current_view.cluster.insecure_skip_tls_verify {
                             client_builder = client_builder.danger_accept_invalid_certs(true);
                         }
@@ -91,6 +160,7 @@ impl KubeClientBuilder {
             }
             let mut headers = header::HeaderMap::new();
             // @TODO: Populate tokens from user\auth-info
+            KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
 
             self.client = client_builder.default_headers(headers).build()?;
             Ok(())
@@ -100,9 +170,10 @@ impl KubeClientBuilder {
     #[must_use]
     pub fn build(mut self) -> Result<KubeClient> {
         self.init_client()?;
+        // at this point config is not null
         Ok(KubeClient {
             client: self.client,
-            config: self.config,
+            config: self.config.unwrap(),
             namespace: self.namespace,
         })
     }
@@ -125,5 +196,15 @@ mod tests {
             .and_then(|c| c.build());
 
         assert!(kube_client.is_ok(), format!("{:?}", kube_client.err()));
+    }
+
+    #[test]
+    fn test_auth_options() {
+        let mut config = load_from_fixture("ca-from-data.yaml").unwrap();
+
+        let mut headers = header::HeaderMap::new();
+        let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
+        assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
+        println!("headers: {:?}", headers);
     }
 }

@@ -153,6 +153,18 @@ impl AuthInfo {
         }
     }
 
+    pub fn get_client_token(&self) -> Result<Vec<u8>> {
+        if let Some(token) = &self.token {
+            Ok(token.as_bytes().to_vec())
+        } else if let Some(ref token_file) = &self.token_file {
+            utils::load_file(token_file)
+        } else {
+            Err(ConfigError::MissingData(
+                "Missing both token and token_file".to_owned(),
+            ))
+        }
+    }
+
     pub fn get_client_key(&self) -> Result<Vec<u8>> {
         if let Some(key_data) = &self.client_key_data {
             utils::b64decode(key_data.as_bytes())
