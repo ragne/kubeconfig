@@ -91,11 +91,38 @@ pub struct ExecConfig {
 }
 
 impl ExecConfig {
+    #[cfg(test)]
     pub fn exec(&self) -> Result<ExecCredential> {
-        let mut cmd = Command::new(&self.command);
-        if let Some(args) = &self.args {
-            cmd.args(args);
+        use std::path::PathBuf;
+        let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        exe.push("fixtures");
+
+        if cfg!(target_os = "windows") {
+            exe.push("mock-aws.ps1");
+        } else {
+            exe.push("mock-aws.sh");
+        }
+        let mut args = if self.args.is_some() {
+            self.args.clone().unwrap()
+        } else {
+            Vec::new()
         };
+        args.insert(0, exe.to_string_lossy().to_string());
+        let command;
+        if cfg!(target_os = "windows") {
+            command = "powershell".to_owned();
+        } else {
+            command = "bash".to_owned();
+        }
+        self._real_exec(&command, &args)
+    }
+
+    // Common functionality shared by test and non-test code. At least this implementation will be tested
+    // I guess that's acceptable trade-off
+    #[doc(hidden)]
+    fn _real_exec(&self, command: &str, args: &Vec<String>) -> Result<ExecCredential> {
+        let mut cmd = Command::new(command);
+        cmd.args(args);
 
         if !&self.env.is_empty() {
             cmd.envs(&self.env);
@@ -111,6 +138,15 @@ impl ExecConfig {
         serde_json::from_slice(&out.stdout).map_err(|e| {
             ConfigError::ExecError(format!("Unable to deserialize json: {}", e.to_string()))
         })
+    }
+
+    #[cfg(not(test))]
+    pub fn exec(&self) -> Result<ExecCredential> {
+        let mut args: Vec<String> = Vec::new();
+        if let Some(_args) = &self.args {
+            args = _args.clone();
+        };
+        self._real_exec(&self.command, &args)
     }
 }
 
@@ -322,7 +358,10 @@ impl Config {
             self.current_context = context_name.to_owned();
             Ok(())
         } else {
-            Err(ConfigError::DoesntExist(format!("Context with name {} doesn't exist", context_name)))
+            Err(ConfigError::DoesntExist(format!(
+                "Context with name {} doesn't exist",
+                context_name
+            )))
         }
     }
 
@@ -335,7 +374,10 @@ impl Config {
             self.current_context = k.to_owned();
             Ok(())
         } else {
-            Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", cluster_name)))
+            Err(ConfigError::DoesntExist(format!(
+                "Cluster with name {} doesn't exist",
+                cluster_name
+            )))
         }
     }
 
@@ -352,10 +394,16 @@ impl Config {
                 self.current_context = context.0.to_owned();
                 Ok(())
             } else {
-                Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", user_name)))
+                Err(ConfigError::DoesntExist(format!(
+                    "Cluster with name {} doesn't exist",
+                    user_name
+                )))
             }
         } else {
-            Err(ConfigError::DoesntExist(format!("Cluster with name {} doesn't exist", user_name)))
+            Err(ConfigError::DoesntExist(format!(
+                "Cluster with name {} doesn't exist",
+                user_name
+            )))
         }
     }
 
@@ -409,24 +457,6 @@ mod tests {
         Config::load(Some(manifest_dir))
     }
 
-    fn patch_exec_command(ec: &mut ExecConfig) -> &ExecConfig {
-        let mut exe = get_fixtures_dir();
-        if cfg!(target_os = "windows") {
-            exe.push("mock-aws.ps1");
-        } else {
-            exe.push("mock-aws.sh");
-        }
-        let mut args = ec.args.take().unwrap();
-        args.insert(0, exe.to_string_lossy().to_string());
-        ec.args = Some(args);
-        if cfg!(target_os = "windows") {
-            ec.command = "powershell".to_owned();
-        } else {
-            ec.command = "bash".to_owned();
-        }
-        ec
-    }
-
     #[test]
     fn should_get_pkcs12() {
         let c = load_from_fixture("ca-from-file.yaml").unwrap();
@@ -459,8 +489,7 @@ mod tests {
         c.auth_infos
             .get_mut(&c.current_context)
             .and_then(|auth_info| {
-                let mut ec = auth_info.exec_config.take().unwrap();
-                let ec = patch_exec_command(&mut ec);
+                let ec = auth_info.exec_config.take().unwrap();
                 let res = ec.exec();
                 assert!(
                     res.is_ok(),

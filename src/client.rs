@@ -84,12 +84,17 @@ impl KubeClientBuilder {
                             }
                         })?
                     } else {
-                        Err(ConfigError::MissingData(
-                            "Missing both token and token_file".to_owned(),
-                        ))
+                        // absence of token is not an error, but we're in result-returning fn,
+                        // so until I find a better way, empty vec would be used as None variant
+                        Ok(Vec::new())
                     }
                 })?;
-                Some(token)
+                if !token.is_empty() {
+                    Some(token)
+                } else {
+                    None
+                }
+                
             }
         };
         let (username, password) = match current_view.auth_info {
@@ -182,7 +187,7 @@ impl KubeClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{get_fixtures_dir, load_from_fixture};
+    use crate::tests::{load_from_fixture};
     use reqwest::Client;
 
     #[test]
@@ -201,10 +206,18 @@ mod tests {
     #[test]
     fn test_auth_options() {
         let mut config = load_from_fixture("ca-from-data.yaml").unwrap();
-
         let mut headers = header::HeaderMap::new();
         let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
         assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
+        assert!(headers.get(reqwest::header::AUTHORIZATION).is_some());
+        println!("headers: {:?}", headers);
+
+        let mut config = load_from_fixture("multiple-clusters.yaml").unwrap();
+        config.set_current("exp-scratch").expect("expect exp-scratch to exist");
+        let mut headers = header::HeaderMap::new();
+        let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
+        assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
+        assert!(headers.get(reqwest::header::AUTHORIZATION).is_some());
         println!("headers: {:?}", headers);
     }
 }
