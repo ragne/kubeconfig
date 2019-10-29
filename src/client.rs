@@ -1,7 +1,7 @@
 use crate::errors::{ConfigError, Result};
-use crate::{Config, Context, CurrentView};
+use crate::{Config, CurrentView};
 use failure::format_err;
-use reqwest::{header, Certificate, Client, ClientBuilder, Identity};
+use reqwest::{header, Certificate, Client, Identity};
 
 pub struct KubeClient {
     pub namespace: String,
@@ -138,37 +138,36 @@ impl KubeClientBuilder {
 
     fn init_client(&mut self) -> Result<()> {
         let mut client_builder = Client::builder();
-        if self.config.is_none() {
-            Err(ConfigError::Unknown(format_err!("No config was found!")))
-        } else {
-            // @TODO: [tidying] remove all unwraps
-            if let Ok(bundle) = self.config.as_mut().unwrap().ca_bundle() {
-                for ca in bundle {
-                    let cert = Certificate::from_der(&ca.to_der()?)?;
-                    client_builder = client_builder.add_root_certificate(cert);
-                }
-            }
-            let current_view = self.config.as_mut().unwrap().get_current_view().unwrap();
-            if let Some(auth_info) = current_view.auth_info {
-                match auth_info.get_pkcs12(" ") {
-                    Ok(p12) => {
-                        let req_p12 = Identity::from_pkcs12_der(&p12.to_der()?, " ")?;
-                        client_builder = client_builder.identity(req_p12);
+        match &self.config {
+            Some(ref config) => {
+                if let Ok(bundle) = config.ca_bundle() {
+                    for ca in bundle {
+                        let cert = Certificate::from_der(&ca.to_der()?)?;
+                        client_builder = client_builder.add_root_certificate(cert);
                     }
-                    Err(_) => {
-                        // if config explicitly specifies doing so
-                        if let Some(true) = &current_view.cluster.insecure_skip_tls_verify {
-                            client_builder = client_builder.danger_accept_invalid_certs(true);
+                }
+                let current_view = config.get_current_view().unwrap();
+                if let Some(auth_info) = current_view.auth_info {
+                    match auth_info.get_pkcs12(" ") {
+                        Ok(p12) => {
+                            let req_p12 = Identity::from_pkcs12_der(&p12.to_der()?, " ")?;
+                            client_builder = client_builder.identity(req_p12);
+                        }
+                        Err(_) => {
+                            // if config explicitly specifies doing so
+                            if let Some(true) = &current_view.cluster.insecure_skip_tls_verify {
+                                client_builder = client_builder.danger_accept_invalid_certs(true);
+                            }
                         }
                     }
                 }
-            }
-            let mut headers = header::HeaderMap::new();
-            // @TODO: Populate tokens from user\auth-info
-            KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
-
-            self.client = client_builder.default_headers(headers).build()?;
-            Ok(())
+                let mut headers = header::HeaderMap::new();
+                KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
+    
+                self.client = client_builder.default_headers(headers).build()?;
+                Ok(())
+            },
+            None => Err(ConfigError::Unknown(format_err!("No config was found!")))
         }
     }
 
@@ -205,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_auth_options() {
-        let mut config = load_from_fixture("ca-from-data.yaml").unwrap();
+        let config = load_from_fixture("ca-from-data.yaml").unwrap();
         let mut headers = header::HeaderMap::new();
         let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
         assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
