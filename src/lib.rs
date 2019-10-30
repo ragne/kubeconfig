@@ -7,6 +7,8 @@ extern crate serde_json;
 extern crate serde_yaml;
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate lazy_static;
 
 mod errors;
 use errors::ConfigError;

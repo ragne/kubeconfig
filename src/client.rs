@@ -1,12 +1,15 @@
 use crate::errors::{ConfigError, Result};
+use crate::incluster::{k8s_server, load_ca, load_default_ns, load_token, K8S_HOST, K8S_PORT, K8S_API};
 use crate::{Config, CurrentView};
 use failure::format_err;
 use reqwest::{header, Certificate, Client, Identity};
 
+#[derive(Debug)]
 pub struct KubeClient {
     pub namespace: String,
-    client: Client,
-    config: Config,
+    pub server_uri: String,
+    pub client: Client,
+    pub config: Option<Config>,
 }
 
 pub struct KubeClientBuilder {
@@ -18,6 +21,37 @@ pub struct KubeClientBuilder {
 impl KubeClientBuilder {
     pub fn new(client: Client) -> Self {
         Self::with_namespace(client, "default".to_string())
+    }
+
+    pub fn incluster() -> Result<KubeClient> {
+        let server = k8s_server().ok_or_else(|| {
+            ConfigError::ConstructionError(format!(
+                "Cannot load config, {} and {} must be set!",
+                K8S_HOST, K8S_PORT
+            ))
+        }).unwrap_or(K8S_API.into());
+
+        let ca = Certificate::from_der(&load_ca()?.to_der()?)?;
+        let token = load_token()?;
+        let default_ns = load_default_ns()?;
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|_| ConfigError::LoadingError("Invalid bearer token".to_owned()))?,
+        );
+
+        let client = Client::builder()
+            .add_root_certificate(ca)
+            .default_headers(headers)
+            .build()?;
+
+        Ok(KubeClient {
+            client: client,
+            config: None,
+            server_uri: server,
+            namespace: default_ns,
+        })
     }
 
     pub fn with_namespace(client: Client, namespace: String) -> Self {
@@ -62,7 +96,10 @@ impl KubeClientBuilder {
         Ok(self)
     }
 
-    fn set_auth_headers(current_view: &CurrentView, headers: &mut reqwest::header::HeaderMap<reqwest::header::HeaderValue>) -> Result<()> {
+    fn set_auth_headers(
+        current_view: &CurrentView,
+        headers: &mut reqwest::header::HeaderMap<reqwest::header::HeaderValue>,
+    ) -> Result<()> {
         let token = match current_view.auth_info {
             None => None,
             Some(ai) => {
@@ -94,7 +131,6 @@ impl KubeClientBuilder {
                 } else {
                     None
                 }
-                
             }
         };
         let (username, password) = match current_view.auth_info {
@@ -113,22 +149,16 @@ impl KubeClientBuilder {
                         "Bearer {}",
                         String::from_utf8_lossy(&token)
                     ))
-                    .map_err(|_| {
-                        ConfigError::LoadingError("Invalid bearer token".to_owned())
-                    })?,
+                    .map_err(|_| ConfigError::LoadingError("Invalid bearer token".to_owned()))?,
                 );
             }
             (None, (Some(username), Some(password))) => {
                 let encoded = base64::encode(&format!("{}:{}", username, password));
                 headers.insert(
                     header::AUTHORIZATION,
-                    header::HeaderValue::from_str(&format!("Basic {}", encoded)).map_err(
-                        |_| {
-                            ConfigError::LoadingError(
-                                "Cannot encode basic auth credentials".to_owned(),
-                            )
-                        },
-                    )?,
+                    header::HeaderValue::from_str(&format!("Basic {}", encoded)).map_err(|_| {
+                        ConfigError::LoadingError("Cannot encode basic auth credentials".to_owned())
+                    })?,
                 );
             }
             _ => {}
@@ -163,11 +193,11 @@ impl KubeClientBuilder {
                 }
                 let mut headers = header::HeaderMap::new();
                 KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
-    
+
                 self.client = client_builder.default_headers(headers).build()?;
                 Ok(())
-            },
-            None => Err(ConfigError::Unknown(format_err!("No config was found!")))
+            }
+            None => Err(ConfigError::Unknown(format_err!("No config was found!"))),
         }
     }
 
@@ -175,10 +205,25 @@ impl KubeClientBuilder {
     pub fn build(mut self) -> Result<KubeClient> {
         self.init_client()?;
         // at this point config is not null
+        let server_uri = self
+            .config
+            .as_ref()
+            .unwrap()
+            .get_current_view()
+            .ok_or_else(|| {
+                ConfigError::ConstructionError(
+                    "Invalid context selected as current-context!".into(),
+                )
+            })?
+            .cluster
+            .server
+            .clone();
+
         Ok(KubeClient {
             client: self.client,
-            config: self.config.unwrap(),
+            config: self.config,
             namespace: self.namespace,
+            server_uri,
         })
     }
 }
@@ -186,8 +231,9 @@ impl KubeClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{load_from_fixture};
+    use crate::tests::load_from_fixture;
     use reqwest::Client;
+    use std::env::{set_var, remove_var};
 
     #[test]
     fn should_build_client() {
@@ -206,17 +252,45 @@ mod tests {
     fn test_auth_options() {
         let config = load_from_fixture("ca-from-data.yaml").unwrap();
         let mut headers = header::HeaderMap::new();
-        let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
+        let res =
+            KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
         assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
         assert!(headers.get(reqwest::header::AUTHORIZATION).is_some());
         println!("headers: {:?}", headers);
 
         let mut config = load_from_fixture("multiple-clusters.yaml").unwrap();
-        config.set_current("exp-scratch").expect("expect exp-scratch to exist");
+        config
+            .set_current("exp-scratch")
+            .expect("expect exp-scratch to exist");
         let mut headers = header::HeaderMap::new();
-        let res = KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
+        let res =
+            KubeClientBuilder::set_auth_headers(&config.get_current_view().unwrap(), &mut headers);
         assert!(res.is_ok(), format!("failed with: {:?}", res.err()));
         assert!(headers.get(reqwest::header::AUTHORIZATION).is_some());
         println!("headers: {:?}", headers);
+    }
+
+    #[test]
+    fn test_incluster() {
+        let kube_client = KubeClientBuilder::incluster();
+        assert!(kube_client.is_ok());
+        let kube_client = kube_client.unwrap();
+        assert_eq!(kube_client.namespace, "default".to_string());
+        assert_eq!(kube_client.server_uri, K8S_API);
+        assert!(kube_client.config.is_none());
+    }
+
+    #[test]
+    fn test_incluster_env_vars() {
+        set_var(K8S_HOST, "example.com");
+        set_var(K8S_PORT, "443");
+        let kube_client = KubeClientBuilder::incluster();
+        assert!(kube_client.is_ok());
+        let kube_client = kube_client.unwrap();
+        assert_eq!(kube_client.namespace, "default".to_string());
+        assert_eq!(kube_client.server_uri, "https://example.com:443".to_string());
+        assert!(kube_client.config.is_none());
+        remove_var(K8S_HOST);
+        remove_var(K8S_PORT);
     }
 }

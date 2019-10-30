@@ -26,6 +26,8 @@ pub enum ConfigError {
     DeserializationError(#[cause] serde_yaml::Error),
     #[fail(display = "API client underlying error: {}", _0)]
     ClientError(#[cause] reqwest::Error),
+    #[fail(display = "Error during client construction: {}", _0)]
+    ConstructionError(String),
 }
 
 impl From<opensslError> for ConfigError {
