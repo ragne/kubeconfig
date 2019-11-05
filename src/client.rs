@@ -1,10 +1,12 @@
 use crate::errors::{ConfigError, Result};
-use crate::incluster::{k8s_server, load_ca, load_default_ns, load_token, K8S_HOST, K8S_PORT, K8S_API};
+use crate::incluster::{
+    k8s_server, load_ca, load_default_ns, load_token, K8S_API, K8S_HOST, K8S_PORT,
+};
 use crate::{Config, CurrentView};
 use failure::format_err;
 use reqwest::{header, Certificate, Client, Identity};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KubeClient {
     pub namespace: String,
     pub server_uri: String,
@@ -24,12 +26,14 @@ impl KubeClientBuilder {
     }
 
     pub fn incluster() -> Result<KubeClient> {
-        let server = k8s_server().ok_or_else(|| {
-            ConfigError::ConstructionError(format!(
-                "Cannot load config, {} and {} must be set!",
-                K8S_HOST, K8S_PORT
-            ))
-        }).unwrap_or(K8S_API.into());
+        let server = k8s_server()
+            .ok_or_else(|| {
+                ConfigError::ConstructionError(format!(
+                    "Cannot load config, {} and {} must be set!",
+                    K8S_HOST, K8S_PORT
+                ))
+            })
+            .unwrap_or(K8S_API.into());
 
         let ca = Certificate::from_der(&load_ca()?.to_der()?)?;
         let token = load_token()?;
@@ -166,49 +170,54 @@ impl KubeClientBuilder {
         Ok(())
     }
 
-    fn init_client(&mut self) -> Result<()> {
+    fn init_client(&mut self, config: &Config) -> Result<()> {
         let mut client_builder = Client::builder();
-        match &self.config {
-            Some(ref config) => {
-                if let Ok(bundle) = config.ca_bundle() {
-                    for ca in bundle {
-                        let cert = Certificate::from_der(&ca.to_der()?)?;
-                        client_builder = client_builder.add_root_certificate(cert);
-                    }
-                }
-                let current_view = config.get_current_view().unwrap();
-                if let Some(auth_info) = current_view.auth_info {
-                    match auth_info.get_pkcs12(" ") {
-                        Ok(p12) => {
-                            let req_p12 = Identity::from_pkcs12_der(&p12.to_der()?, " ")?;
-                            client_builder = client_builder.identity(req_p12);
-                        }
-                        Err(_) => {
-                            // if config explicitly specifies doing so
-                            if let Some(true) = &current_view.cluster.insecure_skip_tls_verify {
-                                client_builder = client_builder.danger_accept_invalid_certs(true);
-                            }
-                        }
-                    }
-                }
-                let mut headers = header::HeaderMap::new();
-                KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
 
-                self.client = client_builder.default_headers(headers).build()?;
-                Ok(())
+        if let Ok(bundle) = config.ca_bundle() {
+            for ca in bundle {
+                let cert = Certificate::from_der(&ca.to_der()?)?;
+                client_builder = client_builder.add_root_certificate(cert);
             }
-            None => Err(ConfigError::Unknown(format_err!("No config was found!"))),
         }
+        let current_view = config.get_current_view().unwrap();
+        if let Some(auth_info) = current_view.auth_info {
+            match auth_info.get_pkcs12(" ") {
+                Ok(p12) => {
+                    let req_p12 = Identity::from_pkcs12_der(&p12.to_der()?, " ")?;
+                    client_builder = client_builder.identity(req_p12);
+                }
+                Err(_) => {
+                    // if config explicitly specifies doing so
+                    if let Some(true) = &current_view.cluster.insecure_skip_tls_verify {
+                        client_builder = client_builder.danger_accept_invalid_certs(true);
+                    }
+                }
+            }
+        }
+        let mut headers = header::HeaderMap::new();
+        KubeClientBuilder::set_auth_headers(&current_view, &mut headers)?;
+
+        self.client = client_builder.default_headers(headers).build()?;
+        Ok(())
     }
 
     #[must_use]
     pub fn build(mut self) -> Result<KubeClient> {
-        self.init_client()?;
+        let config = match self.config.take() {
+            Some(config) => Some(config),
+            None => {
+                if let Ok(config) = Config::default() {
+                    Some(config)
+                } else {
+                    None
+                }
+            }
+        };
+        let config =
+            config.ok_or_else(|| ConfigError::Unknown(format_err!("No config was found!")))?;
+        self.init_client(&config)?;
         // at this point config is not null
-        let server_uri = self
-            .config
-            .as_ref()
-            .unwrap()
+        let server_uri = config
             .get_current_view()
             .ok_or_else(|| {
                 ConfigError::ConstructionError(
@@ -221,7 +230,8 @@ impl KubeClientBuilder {
 
         Ok(KubeClient {
             client: self.client,
-            config: self.config,
+            // probably incluster should have a fake-ish config instead of none
+            config: Some(config),
             namespace: self.namespace,
             server_uri,
         })
@@ -233,7 +243,14 @@ mod tests {
     use super::*;
     use crate::tests::load_from_fixture;
     use reqwest::Client;
-    use std::env::{set_var, remove_var};
+    use std::env::{remove_var, set_var};
+    use std::sync::Mutex;
+
+    lazy_static! {
+        // there is a hidden global state in env. vars that incluster tests use.
+        // rarely there could be a race condition when two tests get launched in parallel
+        static ref LOCK: Mutex<()> = Mutex::new(());
+    }
 
     #[test]
     fn should_build_client() {
@@ -272,6 +289,7 @@ mod tests {
 
     #[test]
     fn test_incluster() {
+        let _lock = LOCK.lock();
         let kube_client = KubeClientBuilder::incluster();
         assert!(kube_client.is_ok());
         let kube_client = kube_client.unwrap();
@@ -282,13 +300,17 @@ mod tests {
 
     #[test]
     fn test_incluster_env_vars() {
+        let _lock = LOCK.lock();
         set_var(K8S_HOST, "example.com");
         set_var(K8S_PORT, "443");
         let kube_client = KubeClientBuilder::incluster();
         assert!(kube_client.is_ok());
         let kube_client = kube_client.unwrap();
         assert_eq!(kube_client.namespace, "default".to_string());
-        assert_eq!(kube_client.server_uri, "https://example.com:443".to_string());
+        assert_eq!(
+            kube_client.server_uri,
+            "https://example.com:443".to_string()
+        );
         assert!(kube_client.config.is_none());
         remove_var(K8S_HOST);
         remove_var(K8S_PORT);

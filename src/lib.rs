@@ -23,14 +23,14 @@ use errors::Result;
 use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
 use std::process::Command;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Preferences {
     pub colors: Option<bool>,
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Cluster {
     pub server: String,
@@ -41,7 +41,7 @@ pub struct Cluster {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Context {
     pub cluster: String,
@@ -51,7 +51,7 @@ pub struct Context {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AuthProviderConfig {
     pub name: String,
@@ -62,7 +62,7 @@ pub struct AuthProviderConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ExecCredentialSpec {}
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ExecCredential {
     pub kind: Option<String>,
@@ -82,7 +82,7 @@ pub struct ExecCredentialStatus {
 
 pub type ExecEnvVars = HashMap<String, String>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ExecConfig {
     pub command: String,
@@ -152,7 +152,7 @@ impl ExecConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AuthInfo {
     pub client_certificate: Option<String>,
@@ -179,7 +179,7 @@ pub struct AuthInfo {
 impl AuthInfo {
     pub fn get_client_certificate(&self) -> Result<Vec<u8>> {
         if let Some(cert_data) = &self.client_certificate_data {
-            utils::b64decode(&cert_data)
+            Ok(cert_data.clone()) // already deserialized
         } else if let Some(cert_file) = &self.client_certificate {
             utils::load_ca_from_file(cert_file)
         } else {
@@ -224,7 +224,7 @@ impl AuthInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Extension;
 
@@ -237,7 +237,7 @@ pub struct CurrentView<'a> {
     auth_info: Option<&'a AuthInfo>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub kind: Option<String>,
@@ -539,6 +539,20 @@ mod tests {
         assert!(
             c.load_certificate_authority().is_ok(),
             format!("{:?}", c.load_certificate_authority().err())
+        );
+        let c = load_from_fixture("base64.yml").unwrap();
+        assert!(
+            c.load_certificate_authority().is_ok(),
+            format!("{:?}", c.load_certificate_authority().err())
+        );
+        let ai: &AuthInfo = c.auth_infos.values().next().unwrap();
+        assert!(
+            ai.get_client_certificate().is_ok(),
+            format!("{:?}", ai.get_client_certificate().err())
+        );
+        assert!(
+            ai.get_client_key().is_ok(),
+            format!("{:?}", ai.get_client_key().err())
         );
     }
 

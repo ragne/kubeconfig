@@ -7,8 +7,7 @@ use std::str::FromStr;
 // https://kubernetes.io/docs/tasks/administer-cluster/access-cluster-api/#accessing-the-api-from-a-pod
 pub const K8S_API: &str = "kubernetes.default.svc";
 
-
-// This fuckery needs an explanation I guess. 
+// This fuckery needs an explanation I guess.
 // That's the "mocking" for static values, if we run under test, we'll use files from fixtures dir
 // otherwise all that leaking shouldn't be seen outside and program will use files in /var/run
 lazy_static! {
@@ -16,7 +15,12 @@ lazy_static! {
         "/var/run/secrets/kubernetes.io/serviceaccount/token"
     } else {
         Box::leak(
-            format!("{}{}", env!("CARGO_MANIFEST_DIR"), "/fixtures/incluster/token").into_boxed_str(),
+            format!(
+                "{}{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "/fixtures/incluster/token"
+            )
+            .into_boxed_str(),
         )
     };
     pub static ref K8S_CERTFILE: &'static str = if !cfg!(test) {
@@ -69,4 +73,3 @@ pub fn k8s_server() -> Option<String> {
         })
         .ok()
 }
-
