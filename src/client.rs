@@ -20,9 +20,19 @@ pub struct KubeClientBuilder {
     config: Option<Config>,
 }
 
+impl Default for KubeClientBuilder {
+    fn default() -> Self {
+        Self {
+            namespace: "default".to_owned(),
+            client: Client::builder().build().expect("Cannot build a default client"),
+            config: None
+        }
+    }
+}
+
 impl KubeClientBuilder {
-    pub fn new(client: Client) -> Self {
-        Self::with_namespace(client, "default".to_string())
+    pub fn new() -> Self {
+        Default::default()
     }
 
     pub fn incluster() -> Result<KubeClient> {
@@ -58,11 +68,10 @@ impl KubeClientBuilder {
         })
     }
 
-    pub fn with_namespace(client: Client, namespace: String) -> Self {
+    pub fn with_namespace(namespace: String) -> Self {
         Self {
-            client,
             namespace,
-            config: None,
+            ..Default::default()
         }
     }
 
@@ -242,7 +251,6 @@ impl KubeClientBuilder {
 mod tests {
     use super::*;
     use crate::tests::load_from_fixture;
-    use reqwest::Client;
     use std::env::{remove_var, set_var};
     use std::sync::Mutex;
 
@@ -255,8 +263,7 @@ mod tests {
     #[test]
     fn should_build_client() {
         let config = load_from_fixture("ca-from-file.yaml").unwrap();
-        let http_client = Client::new();
-        let kube_client = KubeClientBuilder::new(http_client)
+        let kube_client = KubeClientBuilder::new()
             .with_config(config)
             .with_cluster("my-cluster")
             .and_then(|c| c.with_context("my-context"))
