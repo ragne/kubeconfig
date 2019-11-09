@@ -226,22 +226,25 @@ impl KubeClientBuilder {
             config.ok_or_else(|| ConfigError::Unknown(format_err!("No config was found!")))?;
         self.init_client(&config)?;
         // at this point config is not null
-        let server_uri = config
-            .get_current_view()
-            .ok_or_else(|| {
-                ConfigError::ConstructionError(
-                    "Invalid context selected as current-context!".into(),
-                )
-            })?
+        let cv = config
+        .get_current_view()
+        .ok_or_else(|| {
+            ConfigError::ConstructionError(
+                "Invalid context selected as current-context!".into(),
+            )
+        })?;
+        let server_uri = (&cv)
             .cluster
             .server
             .clone();
+
+        let namespace = cv.context.namespace.clone().unwrap_or(self.namespace);
 
         Ok(KubeClient {
             client: self.client,
             // probably incluster should have a fake-ish config instead of none
             config: Some(config),
-            namespace: self.namespace,
+            namespace,
             server_uri,
         })
     }
